@@ -23,7 +23,8 @@ option_list = list(
   make_option(c("-m", "--metadata"), type="character", default=NULL, help="path to metadata table", metavar="character"),
   make_option(c("-d", "--model"), type="character", default=NULL, help="path to linear model file", metavar="character"),
   make_option(c("-n", "--normCounts"), type="character", default=NULL, help="path to normalized counts", metavar="character"),
-  make_option(c("-s", "--species"), type="character", default=NULL, help="Species name. Example format: Hsapiens", metavar="character")
+  make_option(c("-s", "--species"), type="character", default=NULL, help="Species name. Example format: Hsapiens", metavar="character"),
+  make_option(c("-s", "--genelist"), type="character", default=NULL, help="path to genelist file", metavar="character")
 )
 
 opt_parser = OptionParser(option_list=option_list)

@@ -114,7 +114,7 @@ Channel.fromPath("${params.multiqc}")
             .ifEmpty{exit 1, "Please provide multiqc.zip folder!"}
             .set { ch_multiqc_file }
 Channel.fromPath("${params.genelist}")
-            .into { ch_genes_for_deseq2_file; ch_genes_for_report_file }
+            .into { ch_genes_for_deseq2_file; ch_genes_for_report_file; ch_genelist_for_pathway }
 
 ch_fastqc_file = file(params.fastqc)
 
@@ -257,6 +257,7 @@ process Pathway_analysis {
     file(deseq_output) from ch_deseq2_for_pathway
     file(metadata) from ch_metadata_file_for_pathway
     file(model) from ch_model_file_for_pathway
+    file(genelist) from ch_genelist_for_pathway
 
     output:
     file "*.zip" into ch_gprofiler_for_report
@@ -266,7 +267,7 @@ process Pathway_analysis {
     unzip $deseq_output
     gProfileR.R --dirContrasts 'DESeq2/DE_genes_tables/' --metadata $metadata \
     --model $model --normCounts 'DESeq2/gene_counts_tables/rlog_transformed_gene_counts.tsv' \
-    --species $params.species
+    --species $params.species --genelist $genelist
     zip -r gProfileR.zip gProfileR/
     """
 }
