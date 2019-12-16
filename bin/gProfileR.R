@@ -67,6 +67,10 @@ if(is.null(opt$species)){
   stop("Species name is unknown, check for typos or contact responsible person to add your species.")
 }
 
+if(!is.null(opt$genelist)){
+  requested_genes_path = opt$genelist
+}
+
 contrast_files <- list.files(path=opt$dirContrasts)
 path_contrasts <- opt$dirContrasts
 
@@ -86,20 +90,33 @@ min_isect_size <- 1
 # Create output directory
 dir.create(outdir)
 pathway_heatmaps_dir <- "pathway_heatmaps"
+pathway_heatmaps_subset <- "pathway_heatmaps_genelist"
 kegg_pathways_dir <- "KEGG_pathways"
+kegg_pathways_subset <- "KEGG_pathways_genelist"
 
 # Set theme for graphs
 theme_set(theme_classic())
 
+#Read in the genelist 
+gene_ids <- read.table(requested_genes_path, col.names = "requested_gene_name")
+gene_ids$requested_gene_name <- sapply(gene_ids$requested_gene_name, toupper)
+
+if(!is.null(opt$genelist)){
 for (file in contrast_files){
+
   #Reading DE genes list
   fname <- tools::file_path_sans_ext(basename(file))
   
   dir.create(paste(outdir, fname, sep="/"))
   dir.create(paste(outdir, fname, pathway_heatmaps_dir, sep="/"))
+  dir.create(paste(outdir, fname, pathway_heatmaps_subset, sep="/"))
+  dir.create(paste(outdir, fname, kegg_pathways_subset, sep="/"))
   dir.create(paste(outdir, fname, kegg_pathways_dir, sep="/"))
   
   DE_genes <- read.csv(file = paste0(path_contrasts, file), sep="\t", header = T)
+  #Subset with list of supplied genes
+  DE_genes <- subset(DE_genes, gene_name %in% gene_ids$requested_gene_name)
+
   q = as.character(DE_genes$Ensembl_ID)
   
  
@@ -162,7 +179,7 @@ for (file in contrast_files){
           mat$gene_name <- NULL
 
           if (nrow(mat)>1){
-            png(filename = paste(outdir, "/",fname, "/", pathway_heatmaps_dir, "/", "Heatmap_normalized_counts_", pathway$domain, "_", pathway$term.id, "_",fname, ".png", sep=""), width = 2500, height = 3000, res = 300)
+            png(filename = paste(outdir, "/",fname, "/", pathway_heatmaps_subset, "/", "Heatmap_normalized_counts_", pathway$domain, "_", pathway$term.id, "_",fname, ".png", sep=""), width = 2500, height = 3000, res = 300)
             pheatmap(mat = mat, annotation_col = metadata_cond, main = paste(pathway$short_name, "(",pathway$domain,")",sep=" "), scale = "row", cluster_cols = F, cluster_rows = T )
             dev.off()
           }
@@ -188,6 +205,117 @@ for (file in contrast_files){
                       pathway.id = pathway_kegg,
                       species    = short_organism_name,
                       out.suffix=paste(fname,sep="_"))
+              mv_command <- paste0("mv *.png *.xml ","./",outdir, "/",fname, "/", kegg_pathways_subset, "/")
+              system(mv_command)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+}
+
+#Without filtering at all
+for (file in contrast_files){
+
+  #Reading DE genes list
+  fname <- tools::file_path_sans_ext(basename(file))
+
+  dir.create(paste(outdir, fname, sep="/"))
+  dir.create(paste(outdir, fname, pathway_heatmaps_dir, sep="/"))
+  dir.create(paste(outdir, fname, kegg_pathways_dir, sep="/"))
+
+
+  DE_genes <- read.csv(file = paste0(path_contrasts, file), sep="\t", header = T)
+  q = as.character(DE_genes$Ensembl_ID)
+
+
+  #gprofiler query
+  path_enrich <- gprofiler(query = q, organism=organism, 
+                           significant = T, correction_method = "fdr",
+                           min_set_size = min_set_size, max_set_size = max_set_size, min_isect_size = min_isect_size,
+                           src_filter = datasources)
+
+  if (nrow(path_enrich) > 0){
+    path_enrich$original.query.size <- rep(length(q), nrow(path_enrich))
+  }
+  write.table(path_enrich, file = paste0(outdir, "/", fname, "/",fname, "_pathway_enrichment_results.tsv"), sep = "\t", quote = F, col.names = T, row.names = F )
+
+  # Printing numbers
+  print("------------------------------------")
+  print(fname)
+  print("Number of genes in query:")
+  print(length(DE_genes$Ensembl_ID))
+  print("Number of pathways found:")
+  print(summary(as.factor(path_enrich$domain)))
+  print("------------------------------------")
+
+  if (nrow(path_enrich) > 0){ #if there are enriched pathways
+    # Splitting results according to tools
+    res <- split(path_enrich, path_enrich$domain)
+    for (df in res){
+      db_source <- df$domain[1]
+      print(db_source)
+      df$short_name <- sapply(df$term.name, substr, start=1, stop=50)
+
+      # Plotting results for df
+      df_subset <- data.frame(Pathway_name = df$short_name, Query = df$overlap.size, Pathway = df$term.size, Fraction = (df$overlap.size / df$term.size), Pval = df$p.value)
+
+      p <- ggplot(df_subset, aes(x=reorder(Pathway_name, Fraction), y=Fraction)) +
+        geom_bar(aes(fill=Pval), stat="identity", width = 0.7) +
+        geom_text(aes(label=paste0(df_subset$Query, "/", df_subset$Pathway)), vjust=0.4, hjust=-0.5, size=3) +
+        coord_flip() +
+        scale_y_continuous(limits = c(0.00, 1.00)) +
+        scale_fill_continuous(high = "#132B43", low = "#56B1F7") +
+        ggtitle("Enriched pathways") +
+        xlab("") + ylab("Gene fraction (Query / Pathway)")
+      ggsave(p, filename = paste0(outdir, "/", fname, "/", fname, "_", db_source, "_pathway_enrichment_plot.pdf"), device = "pdf", height = 2+0.5*nrow(df_subset), units = "cm", limitsize=F)
+      ggsave(p, filename = paste0(outdir, "/", fname, "/", fname,"_", db_source, "_pathway_enrichment_plot.png"), device = "png", height = 2+0.5*nrow(df_subset), units = "cm", dpi = 300, limitsize=F)
+
+
+      # Plotting heatmaps and pathways for all pathways
+      print("Plotting heatmaps...")
+      if (nrow(df) <= 100 & nrow(df) > 0) {
+        conditions <- grepl("Condition", colnames(metadata))
+        metadata_cond <- as.data.frame(metadata[,conditions])
+        metadata_name <- metadata[,c("QBiC.Code", "Secondary.Name")]
+        row.names(metadata_cond) <- apply(metadata_name,1,paste, collapse = "_")
+
+        for (i in c(1:nrow(df))){
+          pathway <- df[i,]
+          gene_list <- unlist(strsplit(pathway$intersection, ","))
+          mat <- norm_counts[gene_list, ]
+          rownames(mat) <- mat$gene_name
+          mat$gene_name <- NULL
+
+          if (nrow(mat)>1){
+            png(filename = paste(outdir, "/",fname, "/", pathway_heatmaps_dir, "/", "Heatmap_normalized_counts_", pathway$domain, "_", pathway$term.id, "_",fname, ".png", sep=""), width = 2500, height = 3000, res = 300)
+            pheatmap(mat = mat, annotation_col = metadata_cond, main = paste(pathway$short_name, "(",pathway$domain,")",sep=" "), scale = "row", cluster_cols = F, cluster_rows = T )
+            dev.off()
+          }
+
+          # Plotting pathway view only for kegg pathways
+          if (pathway$domain == "keg"){
+            pathway_kegg <- sapply(pathway$term.id, function(x) paste0(short_organism_name, unlist(strsplit(as.character(x), ":"))[2]))
+            print(paste0("Plotting pathway: ", pathway_kegg))
+            # KEGG pathway blacklist. This pathway graphs contain errors and pathview crashes if plotting them.
+            if (pathway_kegg %in% c("mmu05206", "mmu04215", "hsa05206") ) {
+              print(paste0("Skipping pathway: ",pathway_kegg,". This pathway file has errors in KEGG database."))
+            } else {
+              gene.data = DE_genes
+              gene.data.subset = gene.data[gene.data$Ensembl_ID %in% gene_list, c("Ensembl_ID","log2FoldChange")]
+        
+              entrez_ids = mapIds(library, keys=as.character(gene.data.subset$Ensembl_ID), column = "ENTREZID", keytype="ENSEMBL", multiVals="first")
+        
+              gene.data.subset <- gene.data.subset[!(is.na(entrez_ids)),]
+              row.names(gene.data.subset) <- entrez_ids[!is.na(entrez_ids)]
+        
+              gene.data.subset$Ensembl_ID <- NULL
+              pathview(gene.data  = gene.data.subset,
+                      pathway.id = pathway_kegg,
+                      species    = short_organism_name,
+                      out.suffix=paste(fname,sep="_"))
               mv_command <- paste0("mv *.png *.xml ","./",outdir, "/",fname, "/", kegg_pathways_dir, "/")
               system(mv_command)
             }
@@ -197,6 +325,8 @@ for (file in contrast_files){
     }
   }
 }
+
+
 
 
 
